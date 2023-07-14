@@ -5748,14 +5748,17 @@ def test_runtime_inspector_label_and_embed_sparsity_detection(embed_is_sparse, l
     "test_cases",
     [
         ("Add", 0),
-        ("Add", 1),
         ("Add", 2),
+        ("Add", 3),
+        ("Add", 4),
         ("Sub", 0),
-        ("Sub", 1),
         ("Sub", 2),
+        ("Sub", 3),
+        ("Sub", 4),
         ("Mul", 0),
-        ("Mul", 1),
         ("Mul", 2),
+        ("Mul", 3),
+        ("Mul", 4),
         ("MatMul", 0),
         ("MatMul", 1),
         ("Dropout", 0),
@@ -5768,8 +5771,6 @@ def test_ops_for_padding_elimination(test_cases):
     os.environ["ORTMODULE_ENABLE_EMBEDDING_SPARSE_OPTIMIZER"] = "1"
     test_op = test_cases[0]
     case = test_cases[1]
-    # test_op = "Sub"
-    # case = 2
 
     class ToyModel(torch.nn.Module):
         def __init__(self, vocab_size, hidden_size, pad_token_id):
@@ -5783,10 +5784,13 @@ def test_ops_for_padding_elimination(test_cases):
         # in case 0, the shapes of inputs of test_op are [batch_size, seqlen, hidden_size] and [hidden_size],
         #            the test_op should be included in padding elimination subgraph and the GatherGrad should be added to
         #            output of test_op.
-        # in case 1, the shapes of inputs of test_op are [batch_size, seqlen, hidden_size] and [batch_size, 1, hidden_size],
-        #            this case is not support in padding elimination, so the test_op should not be included in padding
-        #            elimination subgraph and the GatherGrad should be added before test_op.
-        # in case 2, the shapes of inputs of test_op are [batch_size, seqlen, hidden_size] and [batch_size, seqlen, hidden_size],
+        # in case 2, the shapes of inputs of test_op are [batch_size, seqlen, hidden_size] and [batch_size, 1, hidden_size],
+        #            the test_op should be included in padding elimination subgraph and a 'Expand + Reshape + ShrunkenGather'
+        #            pattern should be insert to the arg of [batch_size, 1, hidden_size].
+        # in case 3, the shapes of inputs of test_op are [batch_size, seqlen, hidden_size] and [1, hidden_size],
+        #            the test_op should be included in padding elimination subgraph and a 'Expand + Reshape + ShrunkenGather'
+        #            pattern should be insert to the arg of [batch_size, 1, hidden_size].
+        # in case 4, the shapes of inputs of test_op are [batch_size, seqlen, hidden_size] and [batch_size, seqlen, hidden_size],
         #            the test_op should be included in padding elimination subgraph and the GatherGrad should be added to
         #            output of test_op. Besides, the other input of Add should be added 'Reshape + ShrunkenGather' to
         #            flatten and elimination padding.
@@ -5795,9 +5799,11 @@ def test_ops_for_padding_elimination(test_cases):
             one_input = None
             if case == 0:
                 one_input = torch.ones(self.hidden_size, dtype=torch.long).to(device)
-            elif case == 1:
-                one_input = torch.ones((input_shape[0], 1, self.hidden_size), dtype=torch.long).to(device)
             elif case == 2:
+                one_input = torch.ones((input_shape[0], 1, self.hidden_size), dtype=torch.long).to(device)
+            elif case == 3:
+                one_input = torch.ones((1, self.hidden_size), dtype=torch.long).to(device)
+            elif case == 4:
                 one_input = torch.ones(input_shape, dtype=torch.long).to(device)
                 one_input = one_input.unsqueeze(-1).expand(-1, -1, self.hidden_size)
             inputs_embeds = self.word_embeddings(input_ids)
@@ -5885,7 +5891,7 @@ def test_ops_for_padding_elimination(test_cases):
     assert len([node.op_type for node in training_model.graph.node if node.op_type == "NonZero"]) == 1
     assert len([node.op_type for node in training_model.graph.node if node.op_type == "Squeeze"]) == 1
     assert len([node.op_type for node in training_model.graph.node if node.op_type == "PadAndUnflatten"]) == 1
-    if case == 2:
+    if case >= 2:
         assert len([node.op_type for node in training_model.graph.node if node.op_type == "ShrunkenGather"]) == 2
     else:
         assert len([node.op_type for node in training_model.graph.node if node.op_type == "ShrunkenGather"]) == 1
@@ -5900,10 +5906,7 @@ def test_ops_for_padding_elimination(test_cases):
 
     gathergrad_input_optypes = [find_input_node_type(training_model, arg) for arg in gathergrad_node.input]
     if test_op == "Add" or test_op == "Mul" or test_op == "Sub":
-        if case == 0:
-            assert test_op in gathergrad_input_optypes
-        elif case == 1:
-            assert "ATen" in gathergrad_input_optypes
+        assert test_op in gathergrad_input_optypes
     elif test_op == "MatMul":
         if case == 0:
             assert "ATen" in gathergrad_input_optypes
