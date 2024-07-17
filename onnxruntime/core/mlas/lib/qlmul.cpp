@@ -284,6 +284,61 @@ MlasQLinearMulKernel(
     }
 }
 
+
+template<typename DataType>
+static
+void
+MlasFAQLinearMulKernel(
+    const DataType* InputA,
+    float ScaleA,
+    DataType* OutputC,
+    size_t N
+    )
+{
+    const auto ScaleRatio = MlasBroadcastFloat32x4(ScaleA);
+    const auto half = _mm_set1_ps(0.5);
+    const auto ZeroVector = _mm_setzero_si128();
+
+    uint8_t TailDataA[16] = { 0 };
+
+    while (N > 0) {
+        if (N < 16) {
+            MlasCopyTailBytes(TailDataA, (const uint8_t*)InputA, N);
+            InputA = (const DataType*)TailDataA;
+        }
+
+        auto va_i8x16 = _mm_loadu_si128((const MLAS_INT32X4*)InputA);
+        InputA += 16;
+        auto va_lo_s16x8 = MlasExtendToS16<DataType, true>(va_i8x16, ZeroVector);
+        auto va_hi_s16x8 = MlasExtendToS16<DataType, false>(va_i8x16, ZeroVector);
+
+        auto va_lo_sx32x4_1 = _mm_srai_epi32(_mm_unpacklo_epi16(va_lo_s16x8, va_lo_s16x8), 16);
+        auto va_lo_sx32x4_2 = _mm_srai_epi32(_mm_unpackhi_epi16(va_lo_s16x8, va_lo_s16x8), 16);
+        auto va_hi_sx32x4_1 = _mm_srai_epi32(_mm_unpacklo_epi16(va_hi_s16x8, va_hi_s16x8), 16);
+        auto va_hi_sx32x4_2 = _mm_srai_epi32(_mm_unpackhi_epi16(va_hi_s16x8, va_hi_s16x8), 16);
+        const auto vc_lo_s16x8_1 = _mm_cvtps_epi32(_mm_floor_ps(_mm_add_ps(_mm_mul_ps(_mm_cvtepi32_ps(va_lo_sx32x4_1), ScaleRatio), half)));
+        const auto vc_lo_s16x8_2 = _mm_cvtps_epi32(_mm_floor_ps(_mm_add_ps(_mm_mul_ps(_mm_cvtepi32_ps(va_lo_sx32x4_2), ScaleRatio), half)));
+        auto va_lo_r = _mm_packs_epi32(vc_lo_s16x8_1, vc_lo_s16x8_2);
+
+        const auto vc_hi_s16x8_1 = _mm_cvtps_epi32(_mm_floor_ps(_mm_add_ps(_mm_mul_ps(_mm_cvtepi32_ps(va_hi_sx32x4_1), ScaleRatio), half)));
+        const auto vc_hi_s16x8_2 = _mm_cvtps_epi32(_mm_floor_ps(_mm_add_ps(_mm_mul_ps(_mm_cvtepi32_ps(va_hi_sx32x4_2), ScaleRatio), half)));
+
+        auto va_hi_r = _mm_packs_epi32(vc_hi_s16x8_1, vc_hi_s16x8_2);
+
+        auto vc = MlasPackS16_128<DataType>(va_lo_r, va_hi_r);
+
+        if (N >= 16) {
+            _mm_storeu_si128((__m128i*)OutputC, vc);
+            OutputC += 16;
+            N -= 16;
+        } else {
+            _mm_storeu_si128((__m128i*)TailDataA, vc);
+            MlasCopyTailBytes((uint8_t*)OutputC, TailDataA, N);
+            N = 0;
+        }
+    }
+}
+
 #elif defined(MLAS_VSX_INTRINSICS)
 
 template<typename DataType, bool IsScalarB>
@@ -608,6 +663,19 @@ MlasQLinearMul(
     }
 }
 
+template <typename DataType>
+void
+MLASCALL
+MlasFAQLinearMul(
+    const DataType* InputA,
+    float ScaleA,
+    DataType* OutputC,
+    size_t N
+    )
+{
+    MlasFAQLinearMulKernel<DataType>(InputA, ScaleA, OutputC, N);
+}
+
 // Explicit instantiation
 template
 void
@@ -639,4 +707,22 @@ MlasQLinearMul<int8_t>(
     int8_t* OutputC,
     size_t N,
     bool IsScalarB
+    );
+
+template
+void
+MlasFAQLinearMul<uint8_t>(
+    const uint8_t* InputA,
+    float ScaleA,
+    uint8_t* OutputC,
+    size_t N
+    );
+
+template
+void
+MlasFAQLinearMul<int8_t>(
+    const int8_t* InputA,
+    float ScaleA,
+    int8_t* OutputC,
+    size_t N
     );

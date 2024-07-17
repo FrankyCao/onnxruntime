@@ -122,6 +122,7 @@ MlasQLinearAddKernelAvx2Helper(
 
     int64_t n = static_cast<int64_t>(N);
     __m256i vc = _mm256_setzero_si256();
+    auto half = _mm256_set1_ps(0.5);
     while (n > 0) {
         __m256i va_i8x32, vb_i8x32;
         va_i8x32 = MlasLoad32Bytes((const uint8_t*)InputA, n);
@@ -168,8 +169,12 @@ MlasQLinearAddKernelAvx2Helper(
             hihi_f32x8 = _mm256_fmadd_ps(ahihi_8xfp32, VectorScaleRatio_AC, hihi_f32x8);
         }
 
-        const auto vc02 = _mm256_packs_epi32(_mm256_cvtps_epi32(lolo_f32x8), _mm256_cvtps_epi32(lohi_f32x8));
-        const auto vc13 = _mm256_packs_epi32(_mm256_cvtps_epi32(hilo_f32x8), _mm256_cvtps_epi32(hihi_f32x8));
+        auto round_lolo_f32x8 = _mm256_floor_ps(_mm256_add_ps(lolo_f32x8, half));
+        auto round_lohi_f32x8 = _mm256_floor_ps(_mm256_add_ps(lohi_f32x8, half));
+        auto round_hilo_f32x8 = _mm256_floor_ps(_mm256_add_ps(hilo_f32x8, half));
+        auto round_hihi_f32x8 = _mm256_floor_ps(_mm256_add_ps(hihi_f32x8, half));
+        const auto vc02 = _mm256_packs_epi32(_mm256_cvtps_epi32(round_lolo_f32x8), _mm256_cvtps_epi32(round_lohi_f32x8));
+        const auto vc13 = _mm256_packs_epi32(_mm256_cvtps_epi32(round_hilo_f32x8), _mm256_cvtps_epi32(round_hihi_f32x8));
         vc = MlasPackS16_256<DataType>(vc02, vc13);
 
         n -= 32;

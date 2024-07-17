@@ -25,9 +25,46 @@
 #include "core/session/onnxruntime_session_options_config_keys.h"
 #include "nlohmann/json.hpp"
 
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
 #ifdef USE_CUDA
 #include "core/providers/cuda/cuda_provider_options.h"
 #endif
+
+template<typename T>
+void NCHW2NHWC(const T* source, T* dest, int b, int c, int area) {
+    int sourceBatchsize = c * area;
+    int destBatchSize   = sourceBatchsize;
+    for (int bi = 0; bi < b; ++bi) {
+        auto srcBatch = source + bi * sourceBatchsize;
+        auto dstBatch = dest + bi * destBatchSize;
+        for (int i = 0; i < area; ++i) {
+            auto srcArea = srcBatch + i;
+            auto dstArea = dstBatch + i * c;
+            for (int ci = 0; ci < c; ++ci) {
+                dstArea[ci] = srcArea[ci * area];
+            }
+        }
+    }
+}
+
+template<typename T>
+void NHWC2NCHW(const T* source, T* dest, int b, int c, int area) {
+    int sourceBatchsize = c * area;
+    int destBatchSize   = sourceBatchsize;
+    for (int bi = 0; bi < b; ++bi) {
+        auto srcBatch = source + bi * sourceBatchsize;
+        auto dstBatch = dest + bi * destBatchSize;
+        for (int i = 0; i < area; ++i) {
+            auto srcArea = srcBatch + i * c;
+            auto dstArea = dstBatch + i;
+            for (int ci = 0; ci < c; ++ci) {
+                dstArea[ci * area] = srcArea[ci];
+            }
+        }
+    }
+}
 
 using namespace onnxruntime;
 
@@ -874,10 +911,79 @@ int wmain(int argc, wchar_t* argv[]) {
 #else
 int main(int argc, char* argv[]) {
 #endif
-  Ort::Env env{nullptr};
+  // Ort::Env env{nullptr};
+  Ort::Env env = Ort::Env{ORT_LOGGING_LEVEL_INFO, "Default"};
   int retval = -1;
   ORT_TRY {
-    retval = real_main(argc, argv, env);
+      Ort::SessionOptions so(nullptr);
+      
+      int width, height, channel;
+      unsigned char *inputImage = stbi_load("/Users/franky/Desktop/face_model_py/0044.png", &width, &height, &channel, 4);
+      
+      size_t image_size = 3 * width * height;
+      int8_t *image = (int8_t *)malloc(image_size);
+      for (int k = 0; k < height; k++) {
+          for (int i = 0; i < width; i++) {
+              for (int j = 0; j < 4; j++) {
+                  if (j == 3)
+                      continue;
+                  int o = j;
+                  if (j == 0) {
+                      o = 2;
+                  } else if (j == 2) {
+                      o = 0;
+                  }
+                  image[3 * i + width * k * 3 + o] = inputImage[4 * i + width * k * 4 + j] - 128;
+              }
+          }
+      }
+      stbi_image_free(inputImage);
+      int8_t *chw_image = (int8_t *)malloc(image_size);
+      NHWC2NCHW((int8_t *)image, (int8_t *)chw_image, 1, 3, width * height);
+      
+      size_t result_size = 16 * 56 * 32;
+      int8_t *results = (int8_t *)malloc(result_size);
+      
+      const char *model_path = "/Users/franky/Desktop/face_model_py/detect.onnx";
+      Ort::Session* session = new Ort::Session(env, model_path, so);
+      
+      std::array<int64_t, 4> input_shape_{1, 3, height, width};
+
+      auto memory_info = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU);
+
+      auto input_tensor = Ort::Value::CreateTensor<int8_t>(memory_info, chw_image, image_size, input_shape_.data(), input_shape_.size());
+    
+      auto output0_info = session->GetOutputTypeInfo(0);
+      auto tensor_info_output0 = output0_info.GetTensorTypeAndShapeInfo();
+      std::vector<int64_t> outputTensorShape0 = tensor_info_output0.GetShape();
+      
+      auto output1_info = session->GetOutputTypeInfo(0);
+      auto tensor_info_output1 = output1_info.GetTensorTypeAndShapeInfo();
+      std::vector<int64_t> outputTensorShape1 = tensor_info_output1.GetShape();
+      
+      const char* input_names[] = {"data"};
+      std::vector<const char*> output_names = {"heatmap_output.0", "vectormap_output.0"};
+      
+      auto begin = std::chrono::high_resolution_clock::now();
+      auto outputTesors = session->Run(Ort::RunOptions{nullptr}, input_names, &input_tensor, 1, output_names.data(), output_names.size());
+      
+      auto& output_tensor1 = outputTesors[0];
+      int8_t *result_image = (int8_t *)malloc(result_size);
+      int out_channel = (int)outputTensorShape0[1];
+      int out_height = (int)outputTensorShape0[2];
+      int out_width = (int)outputTensorShape0[3];
+      NCHW2NHWC(output_tensor1.GetTensorMutableData<int8_t>(), (int8_t *)result_image, 1, out_channel, out_height * out_width);
+      
+      auto end = std::chrono::high_resolution_clock::now();
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - begin);
+      
+      std::cout << "Total time: " << static_cast<double>(elapsed.count()) << std::endl;
+      input_tensor.release();
+      free(image);
+      free(results);
+      free(result_image);
+
+    // retval = real_main(argc, argv, env);
   }
   ORT_CATCH(const std::exception& ex) {
     ORT_HANDLE_EXCEPTION([&]() {

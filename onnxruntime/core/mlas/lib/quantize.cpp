@@ -75,6 +75,8 @@ MlasQuantizeLinearVector(
 #else
     // N.B. Assumes MXCSR has been configured with the default rounding mode of
     // "round to nearest even".
+    auto half = _mm_set1_ps(0.5);
+    FloatVector = _mm_floor_ps(_mm_add_ps(FloatVector, half));
     auto IntegerVector = _mm_cvtps_epi32(FloatVector);
     IntegerVector = _mm_add_epi32(IntegerVector, ZeroPointVector);
 #endif
@@ -847,7 +849,7 @@ MlasRequantizeOutput(
     //
     // Step through each row of the output matrix.
     //
-
+    auto half = _mm_set1_ps(0.5);
     while (CountM-- > 0) {
 
         const int32_t* bias = Bias;
@@ -916,6 +918,11 @@ MlasRequantizeOutput(
             FloatVector1 = _mm_min_ps(FloatVector1, MaximumValueVector);
             FloatVector2 = _mm_min_ps(FloatVector2, MaximumValueVector);
             FloatVector3 = _mm_min_ps(FloatVector3, MaximumValueVector);
+            
+            FloatVector0 = _mm_floor_ps(_mm_add_ps(FloatVector0, half));
+            FloatVector1 = _mm_floor_ps(_mm_add_ps(FloatVector1, half));
+            FloatVector2 = _mm_floor_ps(_mm_add_ps(FloatVector2, half));
+            FloatVector3 = _mm_floor_ps(_mm_add_ps(FloatVector3, half));
 
             IntegerVector0 = _mm_cvtps_epi32(FloatVector0);
             IntegerVector1 = _mm_cvtps_epi32(FloatVector1);
@@ -1010,7 +1017,8 @@ MlasRequantizeOutput(
 
             FloatVector = _mm_max_ps(FloatVector, MinimumValueVector);
             FloatVector = _mm_min_ps(FloatVector, MaximumValueVector);
-
+            FloatVector = _mm_floor_ps(_mm_add_ps(FloatVector, half));
+            
             IntegerVector = _mm_cvtps_epi32(FloatVector);
             IntegerVector = _mm_add_epi32(IntegerVector, ZeroPointVector);
 

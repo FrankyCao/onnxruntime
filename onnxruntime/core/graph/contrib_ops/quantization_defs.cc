@@ -10,6 +10,7 @@
 #include "core/graph/contrib_ops/contrib_defs.h"
 #include "core/graph/contrib_ops/shape_inference_functions.h"
 #include "onnx/onnx-ml.pb.h" // ?
+#include "onnx/defs/tensor/utils.h"
 
 // Suppress a warning: global initializer calls a non-constexpr function 'symbol' which is from
 // ONNX_OPERATOR_SET_SCHEMA_EX macro and only happens in debug build
@@ -453,6 +454,135 @@ ONNX_MS_OPERATOR_SET_SCHEMA(
     OpSchema().FillUsing(QLinearMathDocGenerator(
         "multiplication",
         "C = ((A - A_zero_point) * (B - B_zero_point)) * (A_scale * B_scale)/C_scale + C_zero_point")));
+
+ONNX_MS_OPERATOR_SET_SCHEMA(
+    FAQLinearMul, 1,
+    OpSchema()
+                            .SetDoc(R"DOC()DOC")
+                            .Input(0, "X", "Input tensor", "T")
+                            .Input(1, "X_scale", "Input X's scale. It's a scalar, which means a per-tensor/layer quantization.",
+                                   "tensor(float)")
+                            .Output(0, "Y", "Output tensor", "T")
+                            .TypeConstraint("T", {"tensor(uint8)", "tensor(int8)"}, "Constrain input and output types to 8 bit tensors.")
+                            .TypeAndShapeInferenceFunction(ONNX_NAMESPACE::propagateShapeAndTypeFromFirstInput));
+
+ONNX_MS_OPERATOR_SET_SCHEMA(
+    FAUpSamplingLinear,
+    1,
+    OpSchema()
+        .Input(0, "X", "N-D tensor", "T", OpSchema::Single, true, 1, OpSchema::Differentiable)
+        .Input(
+            1,
+            "scales",
+            "The scale array along each dimension. It takes value greater than 0. If it's less than 1,"
+            " it's sampling down, otherwise, it's upsampling. The number of elements of 'scales' should"
+            " be the same as the rank of input 'X' or the length of 'axes', if provided. "
+            "One of 'scales' and 'sizes' MUST be specified and it is an error if both are specified. If 'sizes' is needed, the user can use an empty string as the name of 'scales' in this operator's input list.",
+            "tensor(float)",
+            OpSchema::Optional,
+            true,
+            1,
+            OpSchema::NonDifferentiable)
+        .Output(0, "Y", "N-D tensor after resizing", "T", OpSchema::Single, true, 1, OpSchema::Differentiable)
+        .TypeConstraint("T", {"tensor(uint8)", "tensor(int8)"},
+            "Constrain input types to 8 bit signed and unsigned tensors.")
+        .SetDoc(R"DOC()DOC")
+        .TypeAndShapeInferenceFunction([](ONNX_NAMESPACE::InferenceContext& ctx) {
+            propagateElemTypeFromInputToOutput(ctx, 0, 0);
+            if (!hasNInputShapes(ctx, 1)) {
+                return;
+            }
+            const auto& input_shape = getInputShape(ctx, 0);
+            auto* output_shape = getOutputShape(ctx, 0);
+            
+            bool hasScalesInput = ctx.hasInput(1);
+            if (!hasScalesInput) {
+                fail_shape_inference("`scales` must be provided, but not");
+            }
+            if (output_shape->dim_size() > 0) {
+              if (output_shape->dim_size() != input_shape.dim_size()) {
+                fail_shape_inference(
+                    "Ranks inferred (",
+                    input_shape.dim_size(),
+                    ") is not equal to the existing rank value (",
+                    output_shape->dim_size(),
+                    ").");
+              }
+            } else { // Infer the rank of output anyway
+              for (int i = 0; i < input_shape.dim_size(); ++i) {
+                output_shape->add_dim();
+              }
+            }
+            const ONNX_NAMESPACE::TensorProto* scales = ctx.getInputData(1);
+            if (scales && scales->data_type() == ONNX_NAMESPACE::TensorProto::FLOAT) {
+                auto scales_data = ONNX_NAMESPACE::ParseData<float>(scales);
+                if (scales_data.size() != static_cast<size_t>(input_shape.dim_size())) {
+                    fail_shape_inference("Number of elements of input 'scales' must be same as rank of input 'X'");
+                }
+                resizeShapeInferenceHelper(input_shape, scales_data, output_shape);
+            } else {
+                fail_shape_inference("Input 'scales' must have float element type.");
+            }
+        }));
+
+ONNX_MS_OPERATOR_SET_SCHEMA
+   (
+    FAQLinearShuffleNet,
+    1,
+    OpSchema()
+        .Input(0, "X1", "N-D tensor", "T", OpSchema::Single, true, 1, OpSchema::Differentiable)
+        .Input(1, "X2", "N-D tensor", "T", OpSchema::Single, true, 1, OpSchema::Differentiable)
+        .Input(2, "scales", "..", "tensor(float)", OpSchema::Optional, true, 1, OpSchema::NonDifferentiable)
+        .Output(0, "Y1", "N-D tensor", "T", OpSchema::Single, true, 1, OpSchema::Differentiable)
+        .Output(1, "Y2", "N-D tensor", "T", OpSchema::Single, true, 1, OpSchema::Differentiable)
+        .TypeConstraint("T", {"tensor(uint8)", "tensor(int8)"},
+            "Constrain input types to 8 bit signed and unsigned tensors.")
+        .SetDoc(R"DOC()DOC")
+        .TypeAndShapeInferenceFunction([](ONNX_NAMESPACE::InferenceContext& ctx) {
+            propagateElemTypeFromInputToOutput(ctx, 0, 0);
+            if (!hasNInputShapes(ctx, 1)) {
+                return;
+            }
+            const auto& input_shape1 = getInputShape(ctx, 0);
+            const auto& input_shape2 = getInputShape(ctx, 0);
+            auto* output_shape1 = getOutputShape(ctx, 0);
+            auto* output_shape2 = getOutputShape(ctx, 1);
+            
+            bool hasScalesInput = ctx.hasInput(2);
+            if (!hasScalesInput) {
+                fail_shape_inference("`scales` must be provided, but not");
+            }
+            if (output_shape1->dim_size() > 0) {
+              if (output_shape1->dim_size() != input_shape1.dim_size()) {
+                fail_shape_inference(
+                    "Ranks inferred 1 (",
+                    input_shape1.dim_size(),
+                    ") is not equal to the existing rank value (",
+                    output_shape1->dim_size(),
+                    ").");
+              }
+            } else { // Infer the rank of output anyway
+                for (int i = 0; i < input_shape1.dim_size(); ++i) {
+                    auto dim1 = output_shape1->add_dim();
+                    dim1->CopyFrom(input_shape1.dim(i));
+                }
+            }
+            if (output_shape2->dim_size() > 0) {
+              if (output_shape2->dim_size() != input_shape2.dim_size()) {
+                fail_shape_inference(
+                    "Ranks inferred 2 (",
+                    input_shape2.dim_size(),
+                    ") is not equal to the existing rank value (",
+                    output_shape2->dim_size(),
+                    ").");
+              }
+            } else {
+                for (int i = 0; i < input_shape2.dim_size(); ++i) {
+                    auto dim = output_shape2->add_dim();
+                    dim->CopyFrom(input_shape2.dim(i));
+                }
+            }
+        }));
 
 ONNX_MS_OPERATOR_SET_SCHEMA(
     QLinearReduceMean, 1,

@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 #include "core/providers/cpu/tensor/resize.h"
-
+using namespace onnxruntime::common;
 namespace onnxruntime {
 
 ONNX_CPU_OPERATOR_VERSIONED_TYPED_KERNEL(

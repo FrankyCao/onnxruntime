@@ -8,6 +8,7 @@
 #include "core/framework/tensorprotoutils.h"
 #include "core/graph/model.h"
 #include "core/graph/model_load_utils.h"
+#include "core/graph/aes.h"
 
 #ifdef _MSC_VER
 #pragma warning(push)
@@ -682,6 +683,21 @@ Status Model::LoadFromBytes(int count, void* p_bytes, const PathString& model_pa
   return Status::OK();
 }
 
+namespace {
+void e_6BA60E(std::string &str)
+{
+    size_t len = str.length();
+    char temp1;
+    char temp2;
+    for (size_t i = 0; i < len; i++)
+    {
+        temp1 = (str[i] & 0x0f) << 4;
+        temp2 = (str[i] & 0xf0) >> 4;
+        str[i] = temp1 | temp2;
+    }
+}
+}
+
 using ::google::protobuf::io::CodedInputStream;
 using ::google::protobuf::io::FileInputStream;
 using ::google::protobuf::io::ZeroCopyInputStream;
@@ -690,14 +706,45 @@ Status Model::Load(int fd, ONNX_NAMESPACE::ModelProto& model_proto) {
   if (fd < 0) {
     return Status(ONNXRUNTIME, INVALID_ARGUMENT, "<p_fd> less than 0.");
   }
-
+    size_t file_size = 0;
+    int block_size = -1;
+    bool success = false;
+    Status st = Env::Default().GetFileLength(fd, file_size);
+    if (st.IsOK()) {
+        std::string fd_buffer;
+        fd_buffer.resize(15);
+        read(fd, fd_buffer.data(), 15);
+        if (fd_buffer.find("KUGOU") != std::string::npos) {
+            fd_buffer.resize(32);
+            read(fd, fd_buffer.data(), 32);
+            e_6BA60E(fd_buffer);
+            int data_len = -1;
+            read(fd, &data_len, 4);
+            if (data_len > 0) {
+                std::string model_data;
+                model_data.resize(data_len);
+                read(fd, model_data.data(), data_len);
+                e_6BA60D((const uint8_t *)fd_buffer.c_str(), (uint8_t*)model_data.data(), data_len);
+                int real_size = data_len - model_data[data_len - 1];
+                const bool result = model_proto.ParseFromArray(model_data.data(), real_size);
+                if (!result) {
+                    return Status(ONNXRUNTIME, INVALID_PROTOBUF, "Protobuf parsing failed.");
+                }
+                success = true;
+            }
+            if (!success) {
+              return Status(ONNXRUNTIME, INVALID_PROTOBUF, "KGModel parsing failed.");
+            }
+            return Status::OK();
+        } else {
+            lseek(fd, 0, SEEK_SET);
 #if GOOGLE_PROTOBUF_VERSION >= 3002000
-  size_t file_size = 0;
-  int block_size = -1;
-  Status st = Env::Default().GetFileLength(fd, file_size);
-  if (st.IsOK()) {
-    block_size = std::min(DEFAULT_PROTOBUF_BLOCK_SIZE, static_cast<int>(file_size));
-  }
+            block_size = std::min(DEFAULT_PROTOBUF_BLOCK_SIZE, static_cast<int>(file_size));
+#endif
+        }
+    }
+    
+#if GOOGLE_PROTOBUF_VERSION >= 3002000
   FileInputStream input(fd, block_size);
   const bool result = model_proto.ParseFromZeroCopyStream(&input) && input.GetErrno() == 0;
   if (!result) {

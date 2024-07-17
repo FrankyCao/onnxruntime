@@ -370,6 +370,7 @@ MlasQLinearAddKernelHelper(
     const auto VectorScaleRatio_BC = MlasBroadcastFloat32x4(ScaleRatio_BC);
     auto VectorFixedPart = MlasBroadcastFloat32x4((float)ZeroPointC - (ScaleRatio_AC * ZeroPointA + ScaleRatio_BC * ZeroPointB));
 
+    auto half = _mm_set1_ps(0.5);
     MLAS_FLOAT32X4 va_lo, va_hi, vb_lo, vb_hi;
     if (IsScalarB) {
         vb_lo = _mm_set1_ps((float)*InputB);
@@ -393,11 +394,11 @@ MlasQLinearAddKernelHelper(
 
         MLAS_INT32X4 r_lo, r_hi;
         if (IsScalarB) {
-            r_lo = _mm_cvtps_epi32(_mm_add_ps(VectorFixedPart, _mm_mul_ps(va_lo, VectorScaleRatio_AC)));
-            r_hi = _mm_cvtps_epi32(_mm_add_ps(VectorFixedPart, _mm_mul_ps(va_hi, VectorScaleRatio_AC)));
+            r_lo = _mm_cvtps_epi32(_mm_floor_ps(_mm_add_ps(_mm_add_ps(VectorFixedPart, _mm_mul_ps(va_lo, VectorScaleRatio_AC)), half)));
+            r_hi = _mm_cvtps_epi32(_mm_floor_ps(_mm_add_ps(_mm_add_ps(VectorFixedPart, _mm_mul_ps(va_hi, VectorScaleRatio_AC)), half)));
         } else {
-            r_lo = _mm_cvtps_epi32(_mm_add_ps(_mm_add_ps(VectorFixedPart, _mm_mul_ps(va_lo, VectorScaleRatio_AC)), _mm_mul_ps(vb_lo, VectorScaleRatio_BC)));
-            r_hi = _mm_cvtps_epi32(_mm_add_ps(_mm_add_ps(VectorFixedPart, _mm_mul_ps(va_hi, VectorScaleRatio_AC)), _mm_mul_ps(vb_hi, VectorScaleRatio_BC)));
+            r_lo = _mm_cvtps_epi32(_mm_floor_ps(_mm_add_ps(_mm_add_ps(_mm_add_ps(VectorFixedPart, _mm_mul_ps(va_lo, VectorScaleRatio_AC)), _mm_mul_ps(vb_lo, VectorScaleRatio_BC)), half)));
+            r_hi = _mm_cvtps_epi32(_mm_floor_ps(_mm_add_ps(_mm_add_ps(_mm_add_ps(VectorFixedPart, _mm_mul_ps(va_hi, VectorScaleRatio_AC)), _mm_mul_ps(vb_hi, VectorScaleRatio_BC)), half)));
         }
         const auto vc_i16x8 = _mm_packs_epi32(r_lo, r_hi);
         MLAS_INT32X4 vc = MlasPackS16_128<DataType>(vc_i16x8, vc_i16x8);
@@ -426,11 +427,11 @@ MlasQLinearAddKernelHelper(
 
         MLAS_INT32X4 r_lo, r_hi;
         if (IsScalarB) {
-            r_lo = _mm_cvtps_epi32(_mm_add_ps(VectorFixedPart, _mm_mul_ps(va_lo, VectorScaleRatio_AC)));
-            r_hi = _mm_cvtps_epi32(_mm_add_ps(VectorFixedPart, _mm_mul_ps(va_hi, VectorScaleRatio_AC)));
+            r_lo = _mm_cvtps_epi32(_mm_floor_ps(_mm_add_ps(_mm_add_ps(VectorFixedPart, _mm_mul_ps(va_lo, VectorScaleRatio_AC)), half)));
+            r_hi = _mm_cvtps_epi32(_mm_floor_ps(_mm_add_ps(_mm_add_ps(VectorFixedPart, _mm_mul_ps(va_hi, VectorScaleRatio_AC)), half)));
         } else {
-            r_lo = _mm_cvtps_epi32(_mm_add_ps(_mm_add_ps(VectorFixedPart, _mm_mul_ps(va_lo, VectorScaleRatio_AC)), _mm_mul_ps(vb_lo, VectorScaleRatio_BC)));
-            r_hi = _mm_cvtps_epi32(_mm_add_ps(_mm_add_ps(VectorFixedPart, _mm_mul_ps(va_hi, VectorScaleRatio_AC)), _mm_mul_ps(vb_hi, VectorScaleRatio_BC)));
+            r_lo = _mm_cvtps_epi32(_mm_floor_ps(_mm_add_ps(_mm_add_ps(_mm_add_ps(VectorFixedPart, _mm_mul_ps(va_lo, VectorScaleRatio_AC)), _mm_mul_ps(vb_lo, VectorScaleRatio_BC)), half)));
+            r_hi = _mm_cvtps_epi32(_mm_floor_ps(_mm_add_ps(_mm_add_ps(_mm_add_ps(VectorFixedPart, _mm_mul_ps(va_hi, VectorScaleRatio_AC)), _mm_mul_ps(vb_hi, VectorScaleRatio_BC)), half)));
         }
         const auto vc_i16x8 = _mm_packs_epi32(r_lo, r_hi);
         MLAS_INT32X4 vc = MlasPackS16_128<DataType>(vc_i16x8, vc_i16x8);
