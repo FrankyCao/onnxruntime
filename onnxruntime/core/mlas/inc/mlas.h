@@ -1397,6 +1397,17 @@ MlasQLinearMul(
     bool IsScalarB
     );
 
+
+template <typename DataType>
+void
+MLASCALL
+MlasFAQLinearMul(
+    const DataType* InputA,
+    float ScaleA,
+    DataType* OutputC,
+    size_t N
+    );
+
 //
 // Half precision routines
 //
