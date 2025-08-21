@@ -126,6 +126,62 @@ MlasQLinearMulKernel(
     }
 }
 
+template<typename DataType>
+static
+void
+MlasFAQLinearMulKernel(
+    const DataType* InputA,
+    float ScaleA,
+    DataType* OutputC,
+    size_t N
+    )
+{
+    typedef MLAS_SignedUnsignedIntOps<DataType> SUI;
+    
+    const auto ScaleRatio = MlasBroadcastFloat32x4(ScaleA);
+    const auto half = vdupq_n_f32(0.5);
+    const typename SUI::i8x8_t ZeroVector = SUI::vmov_n_i8(0);
+
+    typename SUI::T TailDataA[16] = { 0 };
+
+    while (N > 0) {
+        if (N < 16) {
+            MlasCopyTailBytes((uint8_t*)TailDataA, (const uint8_t*)InputA, N);
+            InputA = (const DataType*)TailDataA;
+        }
+
+        const typename SUI::i8x16_t va_i8x16 = SUI::vld1q_i8(InputA);
+        InputA += 16;
+        
+        auto va_lo_s16x8 = MlasExtendToS16Debias<SUI, /* IsLow = */ true>(va_i8x16, ZeroVector);
+        auto va_hi_s16x8 = MlasExtendToS16Debias<SUI, /* IsLow = */ false>(va_i8x16, ZeroVector);
+
+        auto va_lo_sx32x4_1 = vmovl_s16(vget_low_s16(va_lo_s16x8));
+        auto va_lo_sx32x4_2 = vmovl_s16(vget_high_s16(va_lo_s16x8));
+        auto va_hi_sx32x4_1 = vmovl_s16(vget_low_s16(va_hi_s16x8));
+        auto va_hi_sx32x4_2 = vmovl_s16(vget_high_s16(va_hi_s16x8));
+        const auto vc_lo_s16x8_1 =  vcvtq_s32_f32(vrndq_f32(vaddq_f32(vmulq_f32(vcvtq_f32_s32(va_lo_sx32x4_1), ScaleRatio), half)));
+        const auto vc_lo_s16x8_2 = vcvtq_s32_f32(vrndq_f32(vaddq_f32(vmulq_f32(vcvtq_f32_s32(va_lo_sx32x4_2), ScaleRatio), half)));
+        const int16x8_t va_lo_r = vcombine_s16(vqmovn_s32(vc_lo_s16x8_1), vqmovn_s32(vc_lo_s16x8_2));
+
+        const auto vc_hi_s16x8_1 = vcvtq_s32_f32(vrndq_f32(vaddq_f32(vmulq_f32(vcvtq_f32_s32(va_hi_sx32x4_1), ScaleRatio), half)));
+        const auto vc_hi_s16x8_2 = vcvtq_s32_f32(vrndq_f32(vaddq_f32(vmulq_f32(vcvtq_f32_s32(va_hi_sx32x4_2), ScaleRatio), half)));
+        const int16x8_t va_hi_r = vcombine_s16(vqmovn_s32(vc_hi_s16x8_1), vqmovn_s32(vc_hi_s16x8_2));
+
+        typename SUI::i8x16_t vc = SUI::combine_i8_s16(va_lo_r, va_hi_r);
+
+        if (N >= 16) {
+            SUI::vst1q_i8(OutputC, vc);
+            OutputC += 16;
+            N -= 16;
+        } else {
+            SUI::vst1q_i8(TailDataA, vc);
+            MlasCopyTailBytes((uint8_t*)OutputC, (const uint8_t*)TailDataA, N);
+            N = 0;
+        }
+    }
+}
+
 #elif defined(MLAS_SSE2_INTRINSICS)
 
 template <class DataType, bool IsLow>
